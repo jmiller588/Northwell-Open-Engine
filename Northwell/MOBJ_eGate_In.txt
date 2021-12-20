@@ -1,0 +1,524 @@
+/***************************************************************************************
+ **                        North Shore - LIJ Core Lab                                 **
+ **               Cerner Millennium Open Engine Interface Script                      **
+ **-----------------------------------------------------------------------------------**  
+ **  Script Name:  MOBJ_eGate_In.ccl                                                  **
+ **  Description:  Mod Obj for inbound eGate transactions                             **
+ **  Script Type:  Modify Object                                                      **
+ **-----------------------------------------------------------------------------------**
+ ** Mod#	Author	 Date		   Description                                              **
+ ** 000    JLM   09/21/05    Initial Write                                            **
+ **                                                                                   **
+ ***************************************************************************************/
+;;****TEMPORARY********Block 'NA' Messages from Classic Generated orders
+if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ORR")
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->order_ctrl = "NA")
+      if (size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->filler_field1 [1]->value, 1) > 20)
+         set oenstatus->ignore = 1
+         go to end_of_script
+      endif   
+   endif
+endif
+ 
+if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ORM")
+   if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier = "5103100") 
+      if (oen_reply->ORDER_GROUP [1]->ORC [1]->order_ctrl = "CA")
+         set oenstatus->ignore = 1
+         go to end_of_script      
+      endif
+   endif
+endif
+
+;;first get the contributor_source_cd's of NSHS-Gold and NSHS-Silver
+set gold_source_cd = UAR_GET_CODE_BY("DISPLAYKEY", 73,"NSHSGOLD")
+set silver_source_cd = UAR_GET_CODE_BY("DISPLAYKEY", 73,"NSHSSILVER")
+set test_routing_source_cd = UAR_GET_CODE_BY("DISPLAYKEY", 73,"TESTROUTING")
+
+;;Get the assigning authority
+declare assign_auth = vc
+set assign_auth = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_int [1]->assign_fac_id
+declare two_letter_hospital_id = vc
+set two_letter_hospital_id = ""
+case (assign_auth)
+   of "10000" : set two_letter_hospital_id = "MH"   
+   of "20000" : set two_letter_hospital_id = "GC"
+   of "30000" : set two_letter_hospital_id = "PL"
+   of "40000" : set two_letter_hospital_id = "SY"
+   of "50000" : set two_letter_hospital_id = "FR"
+   of "60000" : set two_letter_hospital_id = "HU"
+   of "70000" : set two_letter_hospital_id = "FH"
+   of "80000" : set two_letter_hospital_id = "LIJ"
+   of "90000" : set two_letter_hospital_id = "SS"
+endcase
+
+;;**************************************
+;;** MSH Segment                      **
+;;**************************************
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_application = "eGate" ;;MSH-3
+;;MSH-4: the ESI assign authority from PID-3.4
+set assign_auth = cnvtstring(cnvtint(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_int [1]->assign_fac_id))
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_facility = assign_auth
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_application = "HNAM"  ;;MSH-5
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_facility = "HNAM"  ;;MSH-6
+
+;;Change encounter cancels to encounter in-activates
+if ((oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ADT") and
+    (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "A11"))
+   set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "A23"
+endif
+
+;;Change encounter A06's to A35's for Invision
+if (assign_auth in ("10000", "20000", "30000", "40000", "70000"))
+   if ((oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ADT") and
+       (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "A06"))
+      set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "A35"
+      declare new_encntr_num = vc
+      declare old_encntr_num = vc
+      set new_encntr_num = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_acct_nbr->acct_nbr
+      set old_encntr_num = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_account_nbr->pat_id
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_account_nbr->pat_id = new_encntr_num ;;PID-18
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_id_int [1]->pat_id = ;;MRG-1.1
+          oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_int [1]->pat_id ;;PID-3
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_id_int [1]->assign_fac_id = assign_auth ;;MRG-1.4     
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_acct_nbr->acct_nbr = old_encntr_num  ;;MRG-3.1
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_acct_nbr->assign_fac_id = assign_auth ;;MRG-3.4       
+   endif
+endif
+
+;;Block person-level ADT^A18 merge transactions
+if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "A18")
+   if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_ctrl_id->ctrl_id1 = "RLCA")
+      set oenstatus->ignore = 1        
+      go to end_of_script 
+   elseif (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_ctrl_id->ctrl_id1 = "CNPN")
+      set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "A35"  
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_id_int [1]->assign_fac_id = assign_auth ;;MRG-1.4
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->MRG [1]->prior_pat_acct_nbr->assign_fac_id = assign_auth ;;MRG-3.4      
+   endif
+endif
+
+;;**************************************
+;;** PID Segment                      **
+;;**************************************
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->set_id = "1" ;;PID-1
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_ext->pat_id = "" ;;PID-2
+
+;;PID-11
+;;Huntington's HBOC sends different county codes.  A translation needs to be made.
+if (assign_auth = "60000")
+   declare silver_county_cd = vc
+   declare gold_county_cd = vc
+   set silver_county_cd = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_address [1]->other_geo_desig
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_address [1]->other_geo_desig = ""   
+   SELECT  into "nl:"
+      cva2.alias
+   FROM
+	    code_value_alias cva,
+	    code_value_alias cva2
+   PLAN cva
+   WHERE
+      cva.code_set = 74 and
+      cva.contributor_source_cd = silver_source_cd and
+      cva.alias = silver_county_cd
+   JOIN cva2
+   WHERE
+      cva2.code_value = cva.code_value and
+      cva2.contributor_source_cd = gold_source_cd
+   DETAIL
+      gold_county_cd = cva2.alias
+   WITH NOCOUNTER
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_address [1]->county = gold_county_cd
+endif
+
+;;PID-13 and 14:  Remove parenthesis and dashes from the phone numbers
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ph_nbr_home->phone_nbr = 
+    cnvtalphanum(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ph_nbr_home->phone_nbr)
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ph_nbr_bus->phone_nbr = 
+    cnvtalphanum(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ph_nbr_bus->phone_nbr)   
+
+;;PID-18.4: Get the assigning authority from PID-3.4
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_account_nbr->assign_fac_id =
+    oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_int [1]->assign_fac_id   
+    
+;;PID-19: Remove dashes from SSN
+;;set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ssn_nbr =
+;;    cnvtalphanum(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ssn_nbr)
+;;if (oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ssn_nbr = "999999999")
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->ssn_nbr = ""
+;;endif       
+    
+;;**************************************
+;;** PV1 Segment                      **
+;;**************************************   
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->set_id = "1" ;;PV1-1 
+
+;;PV1-3
+if (oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->assigned_pat_loc->nurse_unit = "" )
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->assigned_pat_loc->nurse_unit =
+       oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->hospital_service
+endif
+
+;;set assign authority for personnel
+;;PV1-7: Attending
+if (oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->attending_doc->id_nbr != "")
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->attending_doc->assign_auth_id = assign_auth
+endif
+
+;;PV1-8: Move the referring doctor to be a second consulting doctor
+if (size(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc, 5) > 0)
+   if (oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc [1]->last_name = "")
+      set stat = alterlist(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc, 0)
+   endif
+endif
+declare second_consult_alias = vc
+set second_consult_alias = ""
+declare second_consult_name = vc
+set second_consult_name = ""
+declare consult_doc_count = i4
+set consult_doc_count = size(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc, 5)
+if (size(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->referring_doc, 5) > 0)
+   if (oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->referring_doc[1]->last_name != "")   
+      set second_consult_alias = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->referring_doc[1]->id_nbr
+      set second_consult_name = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->referring_doc[1]->last_name      
+      set consult_doc_count = consult_doc_count + 1
+      set stat = alterlist(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc, consult_doc_count)
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc[consult_doc_count]->id_nbr = second_consult_alias
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc[consult_doc_count]->last_name = 
+          second_consult_name      
+      set stat = alterlist(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->referring_doc, 0)
+   endif
+endif
+
+;;PV1-9: Consulting
+if (size(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc, 5) > 0)
+   for (consult_doc_index = 1 to size(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc, 5))
+      set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->consulting_doc[consult_doc_index]->assign_auth_id = assign_auth
+   endfor   
+endif
+;;PV1-17: Admitting
+if (oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->admitting_doc->id_nbr != "")
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->admitting_doc->assign_auth_id = assign_auth
+endif
+
+;;PV1-18 Patient Type
+;;set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->patient_type = "C"
+
+;;PV1-19.4
+if (assign_auth in ("10000", "20000", "30000", "40000", "70000"))
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->visit_nbr->assign_fac_id = assign_auth
+endif
+
+;;PV1-20
+set stat = alterlist(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->fin_class, 1)
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->fin_class [1]->fin_class_id = "HOSP"
+
+;;**************************************
+;;** DG1 Segment                      **
+;;**************************************
+if (size(oen_reply->PERSON_GROUP [1]->CLIN_GROUP, 5) > 0)
+   declare diagnosis_string = vc
+   set dg1_size = size(oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1, 5)
+   for (dg1_index = 1 to dg1_size)
+      set oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->set_id = cnvtstring(dg1_index) ;;DG1-1
+      set oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->coding_method [1]->coding_method = "I9" ;;DG1-2
+      set oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->drg_type =  "W" ;;DG1-6
+      
+      if (dg1_index < dg1_size)
+         set diagnosis_string = 
+             concat(diagnosis_string,
+             oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->proc_code [1]->identifier, "-",
+             oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->proc_description [1]->description, ", ")
+      else
+         set diagnosis_string = 
+             concat(diagnosis_string,
+             oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->proc_code [1]->identifier, "-",
+             oen_reply->PERSON_GROUP [1]->CLIN_GROUP [1]->DG1 [dg1_index]->proc_description [1]->description)      
+      endif       
+   endfor
+   
+   ;;Copy all of the DG1-4's to PV2-3.2. This "reason for visit" is what you can see in ORV and ARE
+   set stat = alterlist(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV2, 1)
+   set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV2->admit_reason->text = diagnosis_string
+endif
+
+
+;;**************************************
+;;** Removing Segments                **
+;;**************************************
+;;NK1, DG1, GT1, IN1, IN2
+set stat = alterlist(oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->NK1, 0)
+if (size(oen_reply->PERSON_GROUP [1]->FIN_GROUP, 5) > 0)   
+   set stat = alterlist(oen_reply->PERSON_GROUP [1]->FIN_GROUP, 0)   
+endif
+;;Remove OBX segments from ADT messages
+if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ADT")
+   for (pg_index = 1 to size(oen_reply->PERSON_GROUP, 5))
+      set stat = alterlist(oen_reply->PERSON_GROUP [pg_index]->PAT_GROUP [1]->obx, 0)
+   endfor
+endif
+
+;;**************************************
+;;** "NA" Messages                    **
+;;**************************************
+if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ORR")
+   set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ORM"
+   set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "O01"
+   
+   ;;ORC-5
+   set oen_reply->ORDER_GROUP [1]->ORC [1]->order_stat = ""
+   
+   ;;OBR-4
+   set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier = ""
+   
+   ;;OBR-20 to ORC-3 and OBR-3
+   set millennium_order_id = oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->filler_field1 [1]->value
+   set oen_reply->ORDER_GROUP [1]->ORC [1]->filler_ord_nbr->id = millennium_order_id
+   set oen_reply->ORDER_GROUP [1]->ORC [1]->filler_ord_nbr->app_id = ""
+   set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->filler_ord_nbr->id = millennium_order_id
+   set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->filler_ord_nbr->app_id = ""
+endif
+
+;;**************************************
+;;** Order Messages                   **
+;;**************************************
+if (oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ORM")
+   ;;**************************************
+   ;;** ORC Segment                      **
+   ;;**************************************
+   ;;ORC-2
+   set oen_reply->ORDER_GROUP [1]->ORC [1]->placer_ord_nbr->app_id = "" ;;OBR-2.2
+   
+   ;;ORC-4
+   set oen_reply->ORDER_GROUP [1]->ORC [1]->placer_group_nbr->id = ""
+   
+   ;;ORC-5
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->order_ctrl = "NW")
+      set oen_reply->ORDER_GROUP [1]->ORC [1]->order_stat = "20"
+   endif
+   
+   ;;ORC-10
+   ;;Posted the HIS username as an order comment on NW order messages
+   declare his = vc
+   if (assign_auth = "50000")
+      set his = "Keane"
+   elseif (assign_auth = "60000")
+      set his = "HBOC"
+   else
+      set his = "Invision"
+   endif
+   ;;Sometimes Keane send blank NTE segments, block them
+   if (size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, 5) > 0)
+      if (size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [1]->comment, 5) = 0)
+         set stat = alterlist(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, 0)
+      endif
+   endif
+   declare his_username = vc
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->order_ctrl = "NW")
+      set his_username = oen_reply->ORDER_GROUP [1]->ORC [1]->entered_by->id_nbr
+      if (his_username != "")
+         set nte_count = size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, 5)
+         set nte_count = nte_count+1
+         set stat = alterlist(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, nte_count)
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_count]->set_id = cnvtstring(nte_count)
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_count]->src_of_comment = "ORDERNOTE"
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_count]->comment [1]->comment =
+             concat("The order was entered into ", his, " by user ", his_username)
+      endif       
+   endif
+   
+   ;;ORC-12:  Add assigning authority
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->ord_provider->id_nbr != "")
+      set oen_reply->ORDER_GROUP [1]->ORC [1]->ord_provider->assign_auth_id = assign_auth
+   endif
+   
+   ;;ORC-16:  Hard code "HIS" for a cancel from the HIS
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->order_ctrl = "CA")
+      set oen_reply->ORDER_GROUP [1]->ORC [1]->ord_ctrl_rsn_cd->identifier = "HIS"
+   endif
+   
+   ;;**************************************
+   ;;** OBR Segment                      **
+   ;;**************************************
+   ;;OBR-4: Franklin's Keane HIS does not send PDM numbers.  A translation needs to be made.
+   set assign_auth = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_int [1]->assign_fac_id
+   if (assign_auth = "50000")
+      declare keane_order_code = vc
+      declare pdm_number = vc
+      set keane_order_code = oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier ;;OBR-4.1
+      SELECT  into "nl:"
+         cva2.alias
+      FROM
+	       code_value_alias cva,
+	       code_value_alias cva2
+      PLAN cva
+      WHERE
+         cva.code_set = 200 and
+         cva.contributor_source_cd = silver_source_cd and
+         cva.alias = keane_order_code
+      JOIN cva2
+      WHERE
+         cva2.code_value = cva.code_value and
+         cva2.contributor_source_cd = gold_source_cd
+      DETAIL
+         pdm_number = cva2.alias
+      WITH NOCOUNTER
+      
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier = pdm_number ;;OBR-4.1
+   endif
+
+   ;;OBR-15: Hard-coding specimen types 
+   ;if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->spec_source->spec_name_cd->identifier = "") 
+      declare specimen_type_alias = vc
+      set specimen_type_alias = ""
+      set pdm_num = oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier
+      select  into "nl:"
+        cva2.alias
+      from          
+	      code_value_alias  cva,
+	      collection_info_qualifiers ciq,
+	      order_catalog oc,
+	      code_value_alias cva2
+      plan cva          
+      where          
+	       cva.alias = pdm_num and
+	       cva.contributor_source_cd = gold_source_cd and
+	       cva.code_set = 200   
+	    join ciq          
+	    where          
+	       ciq.catalog_cd = cva.code_value
+	    join oc
+	    where
+	       oc.catalog_cd = ciq.catalog_cd and
+	       oc.activity_type_cd != 16110711 ;;Helix
+	    join cva2
+	    where
+	       cva2.code_value = ciq.specimen_type_cd and
+	       cva2.contributor_source_cd = gold_source_cd   
+      detail          
+	       specimen_type_alias = cva2.alias
+      with nocounter
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->spec_source->spec_name_cd->identifier = specimen_type_alias
+   ;endif
+   
+   ;;Micro Orders need to post with the default "Micro Spec" specimen source
+   if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->filler_ord_nbr->app_id = "MA")
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->spec_source->spec_name_cd->identifier = ""
+   endif
+   
+   ;;Emstat freetext specimen sources come in OBR-13.  Move this to OBR-15.3
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->entered_by->id_nbr = "EMST")
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->spec_source->coll_meth = ;;OBR-15.3
+          oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->relevent_clin_info ;;OBR-13
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->relevent_clin_info = "" ;;OBR-13
+   endif
+   
+   ;;OBR-16: Add assigning authority
+   if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->ord_provider->id_nbr != "")
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->ord_provider->assign_auth_id = assign_auth
+   endif
+    
+   ;;OBR-24
+   ;;set facility_indicator = oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->assigned_pat_loc->facility_id
+   ;;set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->diag_serv_sec_id = facility_indicator 
+   
+   ;;OBR-27
+   if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->quantity_timing [2]->priority = "STST")
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->quantity_timing [2]->priority = "ST"
+   endif
+   ;;Custom routing for a single test
+   declare pdm_number = vc
+   set pdm_number = oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier ;;OBR-4.1
+   declare special_route_ind = vc
+   set special_route_ind = ""
+   SELECT  into "nl:"
+      cvo.alias
+   FROM
+	    code_value_alias cva,
+	    code_value_outbound cvo
+   PLAN cva
+   WHERE
+      cva.code_set = 200 and
+      cva.contributor_source_cd = gold_source_cd and
+      cva.alias = pdm_number
+   JOIN cvo
+   WHERE
+      cvo.code_value = cva.code_value and
+      cvo.contributor_source_cd = test_routing_source_cd
+   DETAIL
+      special_route_ind = cvo.alias
+   WITH NOCOUNTER
+   
+   if (findstring(two_letter_hospital_id, special_route_ind) > 0)
+      if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->quantity_timing [2]->priority = "RT")
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->quantity_timing [2]->priority = "RI"
+      elseif (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->quantity_timing [2]->priority = "TS")
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->quantity_timing [2]->priority = "TI"         
+      endif
+   endif
+   
+   ;;**************************************
+   ;;** OBX Segment                      **
+   ;;************************************** 
+   ;;Add specimen source as order prompt result for body fluid tests
+   declare pdm_number = vc
+   set pdm_number = oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->univ_service_id->identifier ;;OBR-4.1
+   declare oe_format_id = i4
+   SELECT  into "nl:"
+      oc.oe_format_id
+   FROM
+	    code_value_alias cva,
+	    order_catalog oc
+   PLAN cva
+   WHERE
+      cva.code_set = 200 and
+      cva.contributor_source_cd = gold_source_cd and
+      cva.alias = pdm_number
+   JOIN oc
+   WHERE
+      oc.catalog_cd = cva.code_value
+   DETAIL
+      oe_format_id = oc.oe_format_id
+   WITH NOCOUNTER
+   execute oencpm_msglog build("oe_format_id:", oe_format_id, char(0))
+   if (oe_format_id = 7434198) ;;Lab Body Fluid Gen Lab
+      for (nte_index = 1 to size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, 5))
+         select  into "nl:"
+            cva.alias
+         from          
+	          code_value_alias  cva      
+         where          
+            cva.alias = oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_index]->comment [1]->comment and
+            cva.contributor_source_cd = gold_source_cd and
+	          cva.code_set = 104998      
+         detail
+            stat = alterlist(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBX_GROUP, 1) 
+            oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBX_GROUP [1]->set_id = "1" ;;OBX-1
+            oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBX_GROUP [1]->observation_id->identifier = "FLUIDSOURCE" ;;OBX-3         
+	          oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBX_GROUP [1]->observation_value [1]->value_1 = cva.alias ;;OBX-5
+         with nocounter
+      endfor
+   endif
+   
+   ;;**************************************
+   ;;** NTE Segment                      **
+   ;;**************************************   
+   for (nte_index = 1 to size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, 5))
+      set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_index]->src_of_comment = "ORDERNOTE"
+   endfor
+   
+   ;;Add field OBR-13 as a label comment
+   if (oen_reply->ORDER_GROUP [1]->ORC [1]->order_ctrl = "NW")
+      if (oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->relevent_clin_info != "")
+         set nte_count = size(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, 5)
+         set nte_count = nte_count+1
+         set stat = alterlist(oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE, nte_count)
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_count]->set_id = cnvtstring(nte_count)
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_count]->src_of_comment = "LABELCOMMENT"
+         set oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->NTE [nte_count]->comment [1]->comment =
+             oen_reply->ORDER_GROUP [1]->OBR_GROUP [1]->OBR->relevent_clin_info
+      endif      
+   endif   
+   
+endif
+
+#end_of_script
