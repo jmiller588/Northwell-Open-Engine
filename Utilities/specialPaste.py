@@ -7,7 +7,7 @@ splitText = [x.strip(' ') for x in splitText]
 
 listQuestion = print("""How do you want to separate your list? 
 1. Commas
-2. Quotes""")
+2. Quotes and Commas""")
 question = input()
 
 if question == "1":

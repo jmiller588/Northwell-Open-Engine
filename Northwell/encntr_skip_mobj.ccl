@@ -1,0 +1,88 @@
+/*
+ *  ---------------------------------------------------------------------------------------------
+ *  Script Name:  encntr_skip_mobj
+ *  Description:  Script to skip messages associated with a Cerner generated registration
+ *  Type:  Mod Object
+ *  ---------------------------------------------------------------------------------------------
+ *  Author:  CERNER
+ *  Domain:  D819
+ *  Creation Date:  2/28/2022
+ *  ---------------------------------------------------------------------------------------------
+ *
+/************************************************************************************
+*                      GENERATED MODIFICATION CONTROL LOG                       *
+*************************************************************************************
+* Mod Date        Engineer              Comment
+* ---      --------       --------------------     -------------------------------------------
+* 000   02/28/22 jmiller60                Initial Creation
+*********************************************************************************
+ */
+
+execute oencpm_msglog build("entering the encounter skip script", char(0))
+
+declare msg_encntr_id = f8
+declare enc_id = f8
+declare pm_trans_id = f8
+declare skip_ind = i2
+
+set msg_encntr_id= get_double_value("encntr_id")
+
+set enc_id = cnvtreal(msg_encntr_id)
+
+execute oencpm_msglog build("enc_id :", enc_id , char(0))
+
+;;;query the pm_transaction table check and see if this encounter was created in cerner
+select into "nl:"
+p.pm_hist_tracking_id
+from pm_hist_tracking p
+where p.encntr_id = enc_id
+and p.transaction_type_text = "ADMT"
+and p.create_task = 100000
+detail
+    pm_trans_id = p.pm_hist_tracking_id
+with nocounter
+ if (curqual > 0)
+   set skip_ind = 1
+ endif
+
+execute oencpm_msglog build("skip_ind :", skip_ind, char(0))
+
+if (skip_ind)
+    ;;;ignore the message (not in PROD yet)
+    ;;;set oenstatus->ignore = 1
+    ;;;write out the skip reason to the cqm_oeninterface_tr_1 table
+    set oenstatus->status_text = "Cerner initiated registration"
+endif
+
+execute oencpm_msglog build("exiting the encounter skip script", char(0))
+
+;*********************************
+;** GET_DOUBLE_VALUE subroutine **
+;*********************************
+subroutine get_double_value(string_meaning)
+  declare eso_idx = i4
+  declare list_size = i4
+  set eso_idx = 0
+  set list_size = 0
+  set stat_x = (validate(oen_reply->cerner, "nocernerarea"))
+  if (stat_x = "nocernerarea")
+    return("")
+ else
+    set eso_idx = 0
+    set list_size = 0
+   set list_size = size(oen_reply->cerner->doubleList,5)
+      if( list_size > 0 )
+        set eso_x = 1
+        for ( eso_x = eso_x to list_size )
+          if(oen_reply->cerner->doubleList[eso_x]->strMeaning = string_meaning)
+            set eso_idx = eso_x
+          endif
+        endfor
+      endif
+    if( eso_idx > 0 )
+      return( oen_reply->cerner->doubleList[eso_idx]->dVal )
+    else
+      return(0)
+    endif
+  endif
+end ;get_double_value
