@@ -11,6 +11,6 @@ baseAccn = p.paste()
 #replace hyphens with asteriks for the query
 newAccn = baseAccn.replace("-","*")
 #assemble query from the accession
-accnQuery = ('select * from accession where accession = "*' + newAccn + '*" go')
+accnQuery = ('select * from accession_order_r where accession = "*' + newAccn + '*" go')
 
 p.copy(accnQuery)

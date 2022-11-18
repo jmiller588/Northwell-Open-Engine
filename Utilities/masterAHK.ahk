@@ -44,12 +44,6 @@ Gui, new, ,Create SR
 Gui, +AlwaysOnTop
 Gui, Font, S10, Arial
 
-Gui, Add, Text, x10 y10 w200, Client Mnemonic:
-Gui, Add, Edit, Limit8 vSRmnemonic w150
-
-Gui, Add, Text, x210 y10, SR Number:
-Gui, Add, Edit, Limit9 Number vSRNum w150
-
 Gui, Add, Text, x410 y10, Environment:
 Gui, Add, Edit, vSREnviron w150
 
