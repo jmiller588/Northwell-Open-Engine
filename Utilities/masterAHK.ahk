@@ -5,6 +5,7 @@ SetWorkingDir %A_ScriptDir%  ; Ensures a consistent starting directory.
 
 #.:: run python C:\Users\jmill\Documents\Northwell\Northwell-Open-Engine\Utilities\specialPaste.py
 
+#/:: run python C:\Users\jmill\Documents\Northwell\Northwell-Open-Engine\Utilities\autoQC.py
 
 #s::
 send, jm024001{tab}
@@ -40,14 +41,14 @@ run python C:\Users\jmill\Documents\Northwell\Northwell-Open-Engine\Utilities\cr
 global fLineBreak = "================================================================="
 global tLineBreak = "==============================================================================================="
 
-Gui, new, ,Create SR
+Gui, new, ,Create investigation
 Gui, +AlwaysOnTop
 Gui, Font, S10, Arial
 
 Gui, Add, Text, x410 y10, Environment:
 Gui, Add, Edit, vSREnviron w150
 
-Gui, Add, Text, x10 y70, SR Contact:
+Gui, Add, Text, x10 y70, Contact:
 Gui, Add, Edit, vSRContact w150
 
 Gui, Add, Text, x210 y70, Phone Number:
@@ -56,10 +57,10 @@ Gui, Add, Edit, vSRPhone w150
 Gui, Add, Text, x410 y70, Email:
 Gui, Add, Edit, vSREmail w150
 
-Gui, Add, Text, x10 y130, SR Summary:
+Gui, Add, Text, x10 y130, Summary:
 Gui, Add, Edit, vSRSumm w550 h80
 
-Gui, Add, Text, x10 y250, SR Description:
+Gui, Add, Text, x10 y250, Description:
 Gui, Add, Edit, vSRDesc w550 h200
 
 Gui, Add, Button, x410 y240 w75, PHI
@@ -67,7 +68,7 @@ Gui, Add, Button, x485 y240 w75, HL7
 Gui, Add, Button, x335 y240 w75, ======
 
 Gui, Add, Button, x335 y480 h50 w75, Cancel
-Gui, Add, Button, x410 y480 h50 w150, Create SR
+Gui, Add, Button, x410 y480 h50 w150, Create investigation
 
 Gui, show
 Return
@@ -82,7 +83,7 @@ ButtonCreateSR:
 	myFile = %SRmnemonic% %SRNum%.txt
 	
 	FormatTime, TimeString,, MM.yyyy
-	mypath = C:\Users\jm024001\Documents\Investigations\%TimeString%
+	mypath = C:\Users\jmill\Documents\Northwell\Investigations\%TimeString%
 	
 	FileRead, a_template, C:\Users\jm024001\Documents\Investigations\a_template.txt
 	
