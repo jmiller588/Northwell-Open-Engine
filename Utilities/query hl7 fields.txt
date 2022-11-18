@@ -1,0 +1,85 @@
+;declare a bunch of things that dont need to be changed	
+	set modify maxvarlen 10000000 go
+	declare msh_txt = vc with noconstant(" ") go
+	declare seg_txt = vc with noconstant(" ") go
+	declare msh_ctrl_id = vc with noconstant(" ") go
+	declare field_text = vc with noconstant(" ") go 
+	declare field_tx = vc with noconstant(" ") go 
+	declare find_seg = c3 with noconstant(" ") go 
+	declare find_field = i2 with noconstant(0) go 
+	declare field_value = vc with noconstant(" ") go 
+	declare use_field_value = i2 with noconstant(0) go 
+	declare interface_id = c4 with noconstant(" ") go 
+	declare lookback_days = i2 with noconstant(0) go 
+	;***********USER INPUT DEPENDING ON WHAT IS DESIRED********************
+	set find_seg = "FT1" go 
+	set find_field =  go 
+	set use_field_value = 1 go ; 0 - do not perform search for specific values ... 1 - use the field_value provided next 
+	set field_value = "" go 
+	set interface_id = "1356" go 
+	set lookback_days = 7 go 
+	;**********************DO NOT MODIFY BELOW ************************
+	;select the data 
+	select into "MINE"
+	from oen_txlog ot 
+	where substring(2,4,trim(ot.msgid)) = interface_id
+	and ot.create_dt_tm between 
+	cnvtdatetime(curdate-lookback_days,0)
+	and cnvtdatetime(curdate,curtime3)
+	head report 
+	"Beginning of the HL7 Audit Report"
+	row + 1
+	"OEN_TXLOG.TX_KEY," col + 1 "TEXT DATA"
+	head ot.tx_key 
+	row + 1 
+	orig_tx_key_st = ot.msg_text
+	formatted_tx_key_st = replace(ot.msg_text,char(13),concat(char(13),char(10)),0)
+	msh_txt = substring(findstring("MSH|",ot.msg_text),findstring(char(13),ot.msg_text,1)+1,ot.msg_text)
+	msh_ctrl_id =build("MSH;10:",substring(1,100,piece(msh_txt,"|",9,"Error")))
+	;WHAT SEGMENT AND FIELD DO YOU WANT?
+	;find_seg = "OBR"
+	;find_field = 25
+	seg_txt = substring(
+	findstring(concat(char(13),find_seg),ot.msg_text)
+	,findstring(char(13),ot.msg_text
+	,findstring(concat(char(13),find_seg),ot.msg_text) + 1) - findstring(concat(char(13),find_seg),ot.msg_text)
+	,ot.msg_text)
+	field_tx = piece(seg_txt,"|",find_field + 1,"Error")
+	if (field_tx != "Error")
+	if (use_field_value = 0)
+	col + 1 "TX_KEY:" ot.tx_key 
+	row + 1
+	msh_txt = substring(1,500,msh_txt)
+	col 0 msh_txt
+	row + 1
+	seg_txt = substring(1,500,seg_txt)
+	seg_txt
+	row + 1
+	col + 1 msh_ctrl_id col + 1
+	field_text = substring(1,500,field_tx)
+	row + 1
+	col + 1 field_text
+	elseif (use_field_value = 1 )
+	field_text = substring(1,500,field_tx)
+	if (trim(field_text) = value(build("*",trim(field_value),"*")))
+	col + 1 "TX_KEY:" ot.tx_key 
+	row + 1
+	msh_txt = substring(1,500,msh_txt)
+	col 0 msh_txt
+	row + 1
+	seg_txt = substring(1,500,seg_txt)
+	seg_txt
+	row + 1
+	col + 1 msh_ctrl_id col + 1
+	row + 1
+	seg_field = build(find_seg,".",find_field,":")
+	col + 1 seg_field field_text
+	endif ;field_text = field_value
+	endif ;use_field_value
+	endif ;field_tx
+	foot ot.tx_key 
+	row +1
+	foot report 
+	"Ending of the HL7 Audit Report"
+	WITH maxcol = 1000 
+	go
