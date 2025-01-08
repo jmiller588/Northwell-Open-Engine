@@ -1,0 +1,76 @@
+/*
+ *  ---------------------------------------------------------------------------------------------
+ *  Script Name:  ACUTE_NATERA_IN_PDF_ESI
+ *  Description:  Reference Lab Inbound Mod Obj
+ *  Type:  Open Engine Modify Object Script
+ *  Author:  CERNER
+ *  ---------------------------------------------------------------------------------------------
+ * Mod 001 07/13/2022 SL2453 Processing for cancels
+ */
+
+;; Skip if cancel SL2453
+
+;if (oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_application = "NATERA_ORM")
+If ((oen_reply->RES_ORU_GROUP [1]->OBR->result_status = "X") or
+    (oen_reply->RES_ORU_GROUP [1]->ORC [1]->order_ctrl = "CA"))
+   Set OenStatus->Ignore = 1 
+   go to exit_script
+endif 
+
+;;Removing all but PDF OBX from Result
+
+;Set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_ext->assign_fac_id = ""
+;Set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_account_nbr->assign_fac_id = ""
+
+Set count = 0
+Set oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_application = "NATERA_PDF"
+Set oen_reply->CONTROL_GROUP [1]->MSH[1]->receiving_facility = ""
+Set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_application = "POSTIMAGE"
+
+for (a = 1 to size (oen_reply->RES_ORU_GROUP,5)) 
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->univ_service_id->identifier = "REPORT"
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->univ_service_id->text = ""
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->univ_service_id->coding_system = ""
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->diag_serv_sec_id = "MDOC"
+
+;Make OBR;3 value unique to post PDF reports from Natera.
+;Set oen_reply->RES_ORU_GROUP [a]->OBR->filler_ord_nbr->id = 
+ ; CONCAT(oen_reply->RES_ORU_GROUP [a]->OBR->placer_ord_nbr->id,
+  ; oen_reply->RES_ORU_GROUP [a]->OBR->filler_ord_nbr->id)
+
+    for (b=1 to size(oen_reply->RES_ORU_GROUP [a]->OBX_GROUP, 5))
+      Set stat= alterlist(oen_reply->RES_ORU_GROUP [a]->OBX_GROUP [b]->NTE, 0)
+    endfor
+endfor
+
+For  (obxres=1 to size(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP,5))
+  If (oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->OBX->value_type = "ED")
+    set count = count+1
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->set_id = CNVTSTRING(count)
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->value_type
+                 = oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->OBX->value_type
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_id->identifier = "REPORT"
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_id->text = ""
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_id->coding_system = "" 
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_id->alt_text = ""
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_id->alt_coding_system = ""
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_sub_id = "2"
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_value [1]->value_1 = ""
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_value [1]->value_2 = "APPLICATION"
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_value [1]->value_3 = "PDF"
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_value [1]->value_4 = "BASE64"
+              Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_value [1]->value_5 = 
+                    oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->OBX->observation_value [1]->value_5 
+               Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_res_status
+                   = oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->OBX->observation_res_status 
+               Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->abnormal_flag [1]->abnormal_flag = ""
+               Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->user_def_access_checks = "ATTACHMENT" 
+               Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [count]->OBX->observation_dt_tm
+                   = oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->OBX->observation_dt_tm
+               Set stat = alterlist(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->NTE ,0)
+   Endif ;ED
+Endfor ;obxres
+
+Set stat=alterlist(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP,count)
+
+#exit_script
