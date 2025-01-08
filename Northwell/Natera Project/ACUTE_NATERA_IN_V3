@@ -1,0 +1,341 @@
+/*
+ *  ---------------------------------------------------------------------------------------------
+ *  Script Name:  ACUTE_NATERA_IN_V3
+ *  Description:  Modify object for Natera ORU inbound results
+ *  Type:  Open Engine Modify Object Script
+ *  ---------------------------------------------------------------------------------------------
+ *  Author:  Aksana Abayev
+ *  Domain:  P453
+ *  ---------------------------------------------------------------------------------------------
+ * Mod 001 07/13/2022 SL2453 Processing for cancels, NTE processing
+*  Mod 002 06/20/2024 AA 7383  Copied ACUTE_NATERA_IN_V2 from P453 and created this V3.  No changes made to the script.
+ */
+
+;This section is for the Accession Rebuild work below
+declare  accRebuild (tAcc) = c20
+if (validate (acc_setup->loaded, -1) = -1)
+  record acc_setup
+    (
+    1 site_len  = i2
+    1 year_len  = i2
+    1 jseq_len  = i2
+    1 min_len   = i2
+    1 loaded    = i2
+    )
+  with persist
+endif
+
+;variable declarations
+declare short_accn_num = c30
+set contrib_source = uar_get_code_by("DISPLAY", 73, "NATERA")
+
+;set MSH fields for RLI processing
+set oen_reply->CONTROL_GROUP[1]->MSH[1]->sending_application = "NATERA"
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_application =  "RLI"
+set oen_reply->CONTROL_GROUP[1]->MSH[1]->receiving_facility = "RLI"
+
+if(oen_reply->CONTROL_GROUP[1]->MSH[1]->message_type->messg_type = "ORU")
+
+If (oen_reply->RES_ORU_GROUP [1]->OBR->result_status = "X")
+  ;Set oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_application = "NATERA"
+   Set oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_application = "NATERA_ORM"  ;Mod 001
+   Set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_application = "RLI"
+   Set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_facility = "RLI"
+   Set oen_reply->RES_ORU_GROUP [1]->ORC [1]->order_stat = 
+   oen_reply->RES_ORU_GROUP [1]->OBR->result_status 
+   Set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_type = "ORM"
+   Set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "O01"
+   Set oen_reply->RES_ORU_GROUP [1]->ORC [1]->order_ctrl = "CA"
+  ;Set oen_reply->RES_ORU_GROUP [1]->OBR->placer_ord_nbr->id = ord_id
+
+; NTE cancel comments, copy from OBX to OBR
+  if ((oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_id->text = "Report Summary")  and
+       (size(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->NTE, 5) > 0))
+           set obx_nte_size = size(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->NTE, 5)
+           for (x=1 to obx_nte_size)
+               set obr_nte_size = size(oen_reply->RES_ORU_GROUP [1]->NTE,5)
+         
+               set stat = alterlist(oen_reply->RES_ORU_GROUP [1]->NTE,obr_nte_size+1)
+;;;if (oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->NTE [x]->comment [1]->comment !="")
+
+              Set oen_reply->RES_ORU_GROUP [1]->NTE [obr_nte_size+1]->comment [1]->comment = 
+                       oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->NTE [x]->comment [1]->comment 
+
+              Set oen_reply->RES_ORU_GROUP [1]->NTE [obr_nte_size+1]->src_of_comment = "OC"
+;;;endif
+  ;             Set oen_reply->RES_ORU_GROUP [1]->NTE [obr_nte_size+1] = 
+   ;                  oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->NTE [x]
+           endfor
+   endif
+
+  set stat= alterlist(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP,0) 
+
+
+  ;default cancel reason mod001
+   ;Set oen_reply->ORDER_GROUP [1]->ORC [1]->ord_ctrl_rsn_cd->identifier = "Interface Cancel"
+  If (oen_reply->RES_ORU_GROUP [1]->ORC [1]->ord_ctrl_rsn_cd->identifier = "")
+     Set oen_reply->RES_ORU_GROUP [1]->ORC [1]->ord_ctrl_rsn_cd->identifier = "Interface Cancel"
+  endif
+
+/*
+   for (x=1 to size(oen_reply->RES_ORU_GROUP [1]->NTE,5 ))
+        Set oen_reply->RES_ORU_GROUP [1]->NTE [x]->src_of_comment = "OC"
+   Endfor
+*/
+
+   Go To EXITSCRIPT
+Endif
+
+
+   ;**** ORU PROCESSING *****
+   for (x=1 to size(oen_reply->RES_ORU_GROUP,5))
+      ;copy short accession from OBR;19 to variable short_accn_num
+      Set short_accn_num = oen_reply->RES_ORU_GROUP [x]->OBR->placer_field2
+
+      ;perform cnvtalphanum in case accession number includes dashes
+      set short_accn_num = cnvtalphanum(short_accn_num)
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->placer_field1 [1]->value = short_accn_num
+
+      ;rebuild full accession in OBR 19 for accession matching
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->placer_field2 = accRebuild(short_accn_num)
+
+      ;blank out OBR16 subfields
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->ord_provider->last_name = ""
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->ord_provider->first_name = ""
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->ord_provider->source = ""
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->ord_provider->assign_auth_id = ""
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->ord_provider->id_type = ""
+      Set oen_reply->RES_ORU_GROUP [x]->OBR->ord_provider->assign_fac_id = "" 
+
+      ;if its a reflex order, pull in the specimen type and collection priority and start dt/tm
+      ;all are required to write the new order
+
+      If (oen_reply->RES_ORU_GROUP [x]->OBR->spec_source->spec_name_cd->identifier = "")
+         select cva.alias
+         from accession_order_r aor, order_detail od, code_value_alias cva
+         plan aor
+         where aor.accession = oen_reply->RES_ORU_GROUP [x]->OBR->placer_field2
+         join od
+         where od.order_id = aor.order_id 
+         and od.oe_field_meaning = "SPECIMEN TYPE"
+         join cva
+         where cva.code_value = od.oe_field_value 
+         and cva.code_set = 2052 
+         and cva.contributor_source_cd = contrib_source
+         detail
+            oen_reply->RES_ORU_GROUP [x]->OBR->spec_source->spec_name_cd->identifier = cva.alias
+         with nocounter
+      Endif
+
+      Set obr_27_6_stat = ALTERLIST(oen_reply->RES_ORU_GROUP [x]->OBR->quantity_timing, 2)
+
+      select cva.alias
+      from accession_order_r aor, order_detail od, code_value_alias cva
+      plan aor
+      where aor.accession = oen_reply->RES_ORU_GROUP [x]->OBR->placer_field2
+      join od
+      where od.order_id = aor.order_id 
+      and od.oe_field_meaning = "COLLPRI"
+      join cva
+      where cva.code_value = od.oe_field_value 
+      and cva.code_set = 2054 and
+      cva.contributor_source_cd = contrib_source
+      detail
+         oen_reply->RES_ORU_GROUP [x]->OBR->quantity_timing [1]->priority = cva.alias
+      with nocounter
+
+      select cva.alias
+      from accession_order_r aor, order_detail od, code_value_alias cva
+      plan aor
+      where aor.accession = oen_reply->RES_ORU_GROUP [x]->OBR->placer_field2
+      join od
+      where od.order_id = aor.order_id and od.oe_field_meaning = "REPPRI"
+      join cva
+      where cva.code_value = od.oe_field_value and cva.code_set = 1905 and
+         cva.contributor_source_cd = contrib_source
+      detail
+         oen_reply->RES_ORU_GROUP [x]->OBR->quantity_timing [2]->priority = cva.alias
+      with nocounter
+
+      select o.current_start_dt_tm
+      from orders o, accession_order_r aor
+      plan aor
+      where aor.accession = oen_reply->RES_ORU_GROUP [x]->OBR [1]->placer_field2
+      join o
+      where o.order_id = aor.order_id
+      detail
+        oen_reply->RES_ORU_GROUP [x]->OBR [1]->quantity_timing [1]->start_dt_tm =
+          format(o.current_start_dt_tm, "YYYYMMDDHHMMSS;;D")
+      with nocounter
+
+   endfor ;x
+
+else ;ORU or ORM
+;*************************
+;**** ORM PROCESSING *****
+;*************************
+
+   ;********************************* REFLEX SECTION ***************************************************************
+   ;  if its a reflex order, pull in the specimen type and collection priority and start dt/tm
+   ;  all are required to write the new order.  This section is in ORMORM
+   ;****************************************************************************************************************
+   ;***RLI logic processes reflex orders as ORU messages
+   set oen_reply->CONTROL_GROUP[1]->MSH[1]->message_type->messg_type = "ORU"
+   set oen_reply->CONTROL_GROUP[1]->MSH[1]->message_type->messg_trigger = "R01"
+
+   for (x=1 to size(oen_reply->ORDER_GROUP [1]->OBR_GROUP,5))	
+
+      ;copy short accession from OBR:19 to variable short_accn_num
+      Set short_accn_num = oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->placer_field2      
+		   					
+      ;rebuild full accession in OBR 19 for accession matching
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->placer_field2 = accRebuild(short_accn_num)
+
+      ;blank out OBR 16 subfields
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->ord_provider->last_name = ""
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->ord_provider->first_name = ""
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->ord_provider->source = ""
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->ord_provider->assign_auth_id = ""  
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->ord_provider->id_type = ""
+      Set oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->ord_provider->assign_fac_id = ""
+       
+      ;***pull in the specimen type and collection priority and start dt/tm
+      ;***all are required to write the new order
+
+      select cva.alias
+      from accession_order_r aor, order_detail od, code_value_alias cva
+      plan aor
+      where aor.accession = oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->placer_field2
+      join od
+      where od.order_id = aor.order_id and od.oe_field_meaning = "SPECIMEN TYPE"
+      join cva
+      where cva.code_value = od.oe_field_value and cva.code_set = 2052 and
+       cva.contributor_source_cd = contrib_source
+      detail
+       oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->spec_source->spec_name_cd->identifier  = cva.alias
+      with nocounter
+
+      select cva.alias
+      from accession_order_r aor, order_detail od, code_value_alias cva
+      plan aor
+      where aor.accession = oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->placer_field2 
+      join od
+      where od.order_id = aor.order_id and od.oe_field_meaning = "COLLPRI"
+      join cva
+      where cva.code_value = od.oe_field_value and cva.code_set = 2054 and
+       cva.contributor_source_cd = contrib_source
+      detail
+       oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->quantity_timing [1]->priority  = cva.alias
+      with nocounter
+
+     
+      select o.current_start_dt_tm
+      from orders o, accession_order_r aor
+      plan aor
+      where aor.accession = oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->placer_field2 
+      join o
+      where o.order_id = aor.order_id
+      detail
+       oen_reply->ORDER_GROUP [1]->OBR_GROUP [x]->OBR->quantity_timing [1]->start_dt_tm  =
+         format(o.current_start_dt_tm, "YYYYMMDDHHMMSS;;D")
+      with nocounter
+
+   endfor ;x				  /* END order group ORM looping */
+
+endif ;ORU or ORM
+#EXITSCRIPT
+;*************************
+;**Subroutine accRebuild**
+;*************************
+subroutine accRebuild (_tAcc)
+  set tAcc = fillstring (value (size (trim (_tAcc))), " ")
+  set tAcc = _tAcc
+
+  set uAcc = fillstring (20, " ")
+
+  if (acc_setup->loaded = 0)
+    select into "nl:" a.site_code_length, a.julian_sequence_length, a.year_display_length
+    from accession_setup a
+    where a.accession_setup_id = 72696.00
+    detail
+      acc_setup->loaded = 1
+      acc_setup->site_len = a.site_code_length
+      acc_setup->year_len = a.year_display_length
+      acc_setup->jseq_len = a.julian_sequence_length
+      acc_setup->min_len = acc_setup->site_len + acc_setup->jseq_len + 1
+    with nocounter
+  endif
+
+  ;* Return the truncated accession number when the lookup of the ACCESSION_SETUP information failed.
+  if (acc_setup->loaded = 0)
+    return (tAcc)
+  endif
+
+  ;* Length of the truncated accession number.
+  set tLen = size (tAcc, 1)
+
+  ;* Return the truncated accession number when the length is less thanthe minimum.
+  if (tLen < acc_setup->min_len)
+    return (tAcc)
+  endif
+
+  set SITE_LENGTH = 5
+  set YEAR_LENGTH = 4
+  set JDAY_LENGTH = 3
+  set JSEQ_LENGTH = 6
+  set _site = fillstring (value (SITE_LENGTH), "0")
+  set _year = fillstring (value (YEAR_LENGTH), " ")
+  set _jday = fillstring (value (JDAY_LENGTH), "0")
+  set _jseq = fillstring (value (JSEQ_LENGTH), "0")
+
+  ;* Extract the site prefix.
+  set tSite = substring (1, acc_setup->site_len, tAcc)
+
+  ;* Create the site prefix with the leading zeros.
+  if ((SITE_LENGTH - acc_setup->site_len) > 0)
+    set _site = concat (substring (1, (SITE_LENGTH - acc_setup->site_len), _site),
+      substring (1, acc_setup->site_len, tSite))
+  endif
+
+  ;* Extract the julian sequence.
+  set tPos = tLen - acc_setup->jseq_len
+  set tSeq = substring (tPos + 1, acc_setup->jseq_len, tAcc)
+
+  ;* Create julian sequence with leading zeros.
+  if (JSEQ_LENGTH > acc_setup->jseq_len)
+    set _jseq = concat (substring (1, (JSEQ_LENGTH - acc_setup->jseq_len), _jseq),
+      substring (1, acc_setup->jseq_len, tSeq))
+  else
+    set _jseq = tSeq
+  endif
+
+  ;* Initialize the year and julian day.
+
+  set _dttm = cnvtdatetime (sysdate)
+  set _year = cnvtstring (year (_dttm))
+
+  if (julian (_dttm) < 100)
+    set _jday = concat ("0", cnvtstring (julian (_dttm)))
+  else
+    set _jday = cnvtstring (julian (_dttm))
+  endif
+
+  ;* Extract the year and the julian day.
+
+  set tJul = fillstring (value ((tPos - acc_setup->site_len)), " ")
+  set tJul = substring ((acc_setup->site_len + 1), (tPos - acc_setup->site_len), tAcc)
+  set tPos = size (tJul, 1) - JDAY_LENGTH
+
+      ;* Extract the julian day.
+  if (tPos > 0)
+    ;* The accession was not truncated into the julian day.
+    set _jday = substring (tPos + 1, JDAY_LENGTH, tJul)
+    set _year =  concat (substring (1, (YEAR_LENGTH - tPos), _year), substring (1, tPos, tJul))
+  else
+    ;* The accession was truncated into the julian day.
+    set _jday = concat (substring (1, (JDAY_LENGTH - size (tJul, 1)),_jday), tJul)
+  endif
+
+  set uAcc = concat (trim (uAcc), _site, _year, _jday, _jseq)
+  return (uAcc)
+end
