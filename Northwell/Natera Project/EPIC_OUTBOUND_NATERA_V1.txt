@@ -1,0 +1,343 @@
+/*
+ *  ---------------------------------------------------------------------------------------------
+ *  Script Name:  epic_outbound_natera
+ *  Description:  Reference Lab Inbound Mod Obj
+ *  Type:  Open Engine Modify Object Script
+ *  Author:  CERNER
+ *  ---------------------------------------------------------------------------------------------
+ * Mod 001 07/13/2022 SL2453 Processing for cancels
+ */
+
+execute oencpm_msglog (build("Start_of_Epic_Natera_outbound", char(0)))
+
+;; Skip if cancel SL2453 Mod 001
+
+If (oen_reply->RES_ORU_GROUP [1]->OBR->result_status = "X")
+   Set OenStatus->Ignore = 1 
+   go to exit_script
+endif 
+
+;;;set MODIFY MAXVARLEN 1500000 
+
+declare hl7_cs = f8
+set hl7_cs = uar_get_code_by("DISPLAY_KEY", 73, "HL7STDSRC")
+declare natera_cs =f8
+set natera_cs = uar_get_code_by("DISPLAY_KEY", 73, "NATERA")
+declare ord_id = f8
+declare epic_ord_alias = vc
+declare PDM = vc
+declare order_name = vc
+declare natera_pdm = vc
+set ord_id = cnvtreal(oen_reply->RES_ORU_GROUP [1]->OBR->placer_ord_nbr->id) 
+
+;; drop message if no order_id is sent in with PDF
+if(ord_id = 0.0)
+     set oenstatus->ignore = 1
+     Go To exit_script
+endif
+
+;;;TG 12/13/21
+;;; Epic needs to receive the discrete result before the PDF arrives
+;;;This query keeps searching for the discrete result_id based from the order_id until its been completed in Cerner.
+;;; It will loop 30000X until it finds it or let is pass through as is.
+
+
+;;step 1 waits until result from discrete post
+declare query_count = i4
+set query_count = 0
+declare found_a_row_ind = i4
+set found_a_row_ind = 0
+declare result_id = f8
+while ((result_id = 0) and (query_count < 30000) and (found_a_row_ind = 0))
+   select into "nl:"
+      r.result_id
+   from
+       result r
+     ,orders o
+ plan r where r.order_id = ord_id
+ join o where r.order_id = o.order_id and o.dept_status_cd = 9312.00  ;; Completed
+   detail
+      result_id = r.result_id
+      found_a_row_ind = 1
+   with nocounter
+   set query_count = query_count + 1
+execute oencpm_msglog build("query_count:", result_id, " - ", query_count,  char(0))
+endwhile
+
+;;step 2 Dummy script slows down the processing before PDF is sent to Epic
+
+execute oencpm_msglog build("Pause_Script_Start:", char(0))
+
+declare MAX_PAUSE_TIME = I2 With Public, Constant(4000)  ;; this will pause it for approx 40 second
+
+Set stat = Pause_Script(0)
+
+execute oencpm_msglog build("Pause_Script_End:", char(0))
+/*declare ind = i2
+select into "nl:"
+aor.accession_nbr
+from um_charge_event_st aor
+where aor.order_dt_tm BETWEEN CNVTLOOKBEHIND("3,M") AND CNVTDATETIME(CURDATE,CURTIME3)
+and aor.accession_nbr = "000252021334000002"
+   detail
+ind = 1
+with nocounter
+*/
+
+execute oencpm_msglog (build("order_id:",ord_id, char(0)))
+
+select into "nl:"
+   oa.alias
+  ,o.order_mnemonic
+  ,cvo.alias
+  ,cva.alias
+from 
+   orders o
+  ,order_alias oa
+  ,code_value_outbound cvo
+  ,code_value_alias cva
+plan o where o.order_id = ord_id
+join oa where o.order_id = oa.order_id 
+join cvo where o.catalog_cd = cvo.code_value and cvo.contributor_source_cd = hl7_cs
+join cva where cvo.code_value = cva.code_value and cva.contributor_source_cd = natera_cs
+    detail
+  epic_ord_alias = oa.alias
+  PDM = cvo.alias
+  order_name = o.order_mnemonic
+  natera_pdm = cva.alias
+
+with nocounter
+
+execute oencpm_msglog (build("Epic:",epic_ord_alias, char(0)))
+execute oencpm_msglog (build("PDM:",pdm, char(0)))
+execute oencpm_msglog (build("Name:",order_name, char(0)))
+execute oencpm_msglog (build("Natera_PDM:",natera_pdm, char(0)))
+
+if(natera_pdm !="")
+
+;;MSH
+Set oen_reply->CONTROL_GROUP [1]->MSH [1]->sending_application = "CERNER"
+Set oen_reply->CONTROL_GROUP [1]->MSH[1]->sending_facility = "HNA"
+Set oen_reply->CONTROL_GROUP [1]->MSH[1]->receiving_facility = "HHC"
+Set oen_reply->CONTROL_GROUP [1]->MSH [1]->receiving_application = "EPIC"
+
+Set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_type->messg_trigger = "R03"
+
+declare datetime = dq8
+declare cur_time = c6
+declare cur_date = c8
+
+set datetime = cnvtdatetime(curdate,curtime3)
+
+set cur_date  =  format(CURDATE, "YYYYMMDD;;D")
+set cur_time = cnvtstring(trim(format(datetime,"HHMMSS;;Q")))
+
+execute oencpm_msglog (build("cur_time:",cur_time, char(0)))
+execute oencpm_msglog (build("cur_date:",cur_date, char(0)))
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_time_stamp = concat(cur_date, cur_time)
+
+/*
+;;;MSH6 ;;need to set time stamp ahead 5 minutes so discrete can post before PDF.
+
+declare cur_dttm = vc
+declare cur_year = c4
+declare cur_time = dq8
+declare newtime = vc
+declare newtime2 = vc
+declare cur_ss = c2
+
+set cur_dttm  =  format(CURDATE, "YYYYMMDD;;D")
+
+execute oencpm_msglog (build("cur_dttm:",cur_dttm, char(0)))
+
+;;find current year
+set cur_year = substring(1, 4, cur_dttm)
+execute oencpm_msglog (build("cur_year:",cur_year, char(0)))
+
+;; add 5 minutes to current time
+set cur_time = cnvtdatetime(cnvtlookahead("5,MIN",cnvtdatetime(curdate,curtime3)))
+
+set newtime = cnvtstring(trim(format(cur_time,"MMDDHHMM;;Q")))
+set newtime2 = cnvtstring(trim(format(cur_time,"HHMMSS;;Q")))
+
+execute oencpm_msglog (build("newtime:",newtime, char(0)))
+execute oencpm_msglog (build("newtime2:",newtime2, char(0)))
+
+;;find current seconds
+set cur_ss = substring(5,2, newtime2)
+execute oencpm_msglog (build("cur_ss:",cur_ss, char(0)))
+
+set oen_reply->CONTROL_GROUP [1]->MSH [1]->message_time_stamp = CONCAT (cur_year, newtime, cur_ss)
+*/
+
+;;PID 2/3
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_ext->assign_fac_id = 
+substring(1, 2, oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->assigned_pat_loc->nurse_unit)
+ 
+set oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PID [1]->patient_id_int [1]->assign_fac_id = 
+substring(1, 2, oen_reply->PERSON_GROUP [1]->PAT_GROUP [1]->PV1 [1]->assigned_pat_loc->nurse_unit)
+
+;;ORC/OBR
+set oen_reply->RES_ORU_GROUP [1]->ORC [1]->order_ctrl = "CN"
+set oen_reply->RES_ORU_GROUP [1]->ORC [1]->placer_ord_nbr->id = ""
+set oen_reply->RES_ORU_GROUP [1]->ORC [1]->placer_ord_nbr->app_id = ""
+
+set oen_reply->RES_ORU_GROUP [1]->ORC [1]->filler_ord_nbr->id = ""
+set oen_reply->RES_ORU_GROUP [1]->ORC [1]->filler_ord_nbr->app_id = ""
+
+
+;; OBR3/4
+set oen_reply->RES_ORU_GROUP [1]->OBR->filler_ord_nbr->id = epic_ord_alias
+set oen_reply->RES_ORU_GROUP [1]->OBR->filler_ord_nbr->app_id = "EPC"
+
+endif
+
+Set count = 0
+for (a = 1 to size (oen_reply->RES_ORU_GROUP,5)) 
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->univ_service_id->identifier = PDM
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->univ_service_id->text = order_name
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->univ_service_id->coding_system = "LABEAP"
+   Set oen_reply->RES_ORU_GROUP [a]->OBR->diag_serv_sec_id = "General Lab"
+
+;;OBR16 copy ordering provider from ORC12
+set oen_reply->RES_ORU_GROUP [a]->OBR [1]->ord_provider [1]->id_nbr 
+   = oen_reply->RES_ORU_GROUP [1]->ORC [1]->ord_provider [1]->id_nbr 
+
+set oen_reply->RES_ORU_GROUP [a]->OBR [1]->ord_provider [1]->last_name 
+   = oen_reply->RES_ORU_GROUP [1]->ORC [1]->ord_provider [1]->last_name 
+
+set oen_reply->RES_ORU_GROUP [a]->OBR [1]->ord_provider [1]->first_name 
+   = oen_reply->RES_ORU_GROUP [1]->ORC [1]->ord_provider [1]->first_name 
+
+set oen_reply->RES_ORU_GROUP [a]->OBR [1]->ord_provider [1]->middle_name 
+   = oen_reply->RES_ORU_GROUP [1]->ORC [1]->ord_provider [1]->middle_name 
+
+   set oen_reply->RES_ORU_GROUP [a]->OBR->quantity_timing [1]->priority = "R"
+   set oen_reply->RES_ORU_GROUP [a]->OBR->quantity_timing [2]->priority = "R"
+
+    for (b=1 to size(oen_reply->RES_ORU_GROUP [a]->OBX_GROUP, 5))
+      Set stat= alterlist(oen_reply->RES_ORU_GROUP [a]->OBX_GROUP [b]->NTE, 0)
+    endfor
+endfor
+
+
+;;Removing all but PDF OBX from Result
+
+execute oencpm_msglog build("Begin script MOBJ_FILTER_OBX", char(0))
+
+Declare ORU_Size = I2
+Declare OBX_Size = I2
+Declare Filter_OBX_ST(resIndex) = I2
+
+set ORU_Size = Size(oen_reply->RES_ORU_GROUP, 5)
+
+
+execute oencpm_msglog build("OBR_Size initial: ", ORU_Size, char(0))
+
+For (oruCtr = 1 To ORU_Size)
+	;call our subroutine that will remove all obx segments 
+	Set stat = Filter_OBX_ST(oruCtr)
+EndFor
+
+execute oencpm_msglog build("End script MOBJ_FILTER_OBX", char(0))
+  
+;;;OBX segment
+
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->set_id = "1"
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->value_type = "ED"                
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_id->identifier = "21H01000DG"
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_id->text = order_name
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_id->coding_system = "LABLRR" 
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_id->alt_text = ""
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_id->alt_coding_system = ""
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_sub_id = "1"
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1]->value_1 = ""
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1]->value_2 = "PDF"
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1]->value_3 = "PDF"
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1]->value_4 = "BASE64"
+
+  Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->abnormal_flag [1]->abnormal_flag = ""
+
+ Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_dt_tm
+                   = oen_reply->CONTROL_GROUP [1]->MSH [1]->message_time_stamp 
+
+
+set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->obs_method [1]->identifier 
+               = "Natera Sendouts Subsection"
+ ;;;Set stat = alterlist(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [obxres]->NTE ,0)
+
+
+;put all data in the first OBX;5.5
+
+Set obx5_size = size(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value, 5)
+                                     
+If (obx5_size > 0)
+  For (v=1 to obx5_size)
+    If (v != 1)    
+      Set oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1]->value_5 = 
+        CONCAT(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1]->value_5, 
+            oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [v]->value_5)
+    Endif ; v != 1
+  Endfor ;v to obx5_size
+Endif ; obx5_size > 0
+
+;remove other instances execpt the first one
+Set STAT = ALTERLIST(oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value, 1)
+
+#exit_script
+execute oencpm_msglog (build("End_of_Epic_Natera_outbound", char(0)))
+
+
+;*********************************************************************************************************************
+
+Subroutine Filter_OBX_ST(resIndex)
+Set obxCtr = 1
+     set OBX_Size  = size(oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP, 5)
+    
+  ;;;       oen_reply->RES_ORU_GROUP [1]->OBX_GROUP [1]->OBX->observation_value [1][1]                                  
+
+execute oencpm_msglog build("OBX_Size Initial: ", OBX_Size, char(0))
+
+While (obxCtr <= OBX_Size)
+	execute oencpm_msglog build("cur obx size1: ", 
+			Size(oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP,5), char(0))
+execute oencpm_msglog build("OBX;2: ", 
+oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP [obxCtr]->OBX->value_type, char(0))
+		execute oencpm_msglog build("OBX;3.1: ", 
+oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP [obxCtr]->OBX->observation_id->alt_identifier, char(0))
+		execute oencpm_msglog build("OBX;5.1: ", 
+oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP [obxCtr]->OBX->observation_value[1]->value_1, char(0))
+		execute oencpm_msglog build("OBX;5.2: ", 
+oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP [obxCtr]->OBX->observation_value[1]->value_2, char(0))
+		;only execute logic if it's a ST data type
+
+
+	If (oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP [obxCtr]->OBX->value_type = "ST")
+	   set cur_obx_size = Size(oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP,5)                              		
+                   execute oencpm_msglog build("cur_obx_size: ", cur_obx_size, char(0))
+	Set stat = AlterList(oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP, (cur_obx_size-1), (obxCtr-1))
+	Set OBX_Size = Size(oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP, 5)
+		Set obxCtr = obxCtr - 1
+	EndIf
+	
+		set obxCtr = obxCtr + 1
+	EndWhile
+	execute oencpm_msglog build("OBX_Size after: ", 
+		size(oen_reply->RES_ORU_GROUP [resIndex]->OBX_GROUP, 5), char(0))
+End
+
+;*********************************************************************************************************************
+
+Subroutine Pause_Script(junk)
+  Declare tmpStartTime = F8
+  Declare tmpEndTime   = F8
+  Set tmpStartTime = CURTIME3
+  Set tmpEndTime = (tmpStartTime + MAX_PAUSE_TIME)
+  While (tmpStartTime < tmpEndTime)
+    Set tmpStartTime = CURTIME3
+    ;;;;Call Pause(1)
+  EndWhile
+  return (1)
+End ;; End
+
+;;;; ================
